@@ -18,9 +18,8 @@ const (
 )
 
 type Task struct {
-	ID       int
-	TaskType TaskType
-	//map
+	ID        int
+	TaskType  TaskType
 	FileNames []string
 	NReduce   int
 }

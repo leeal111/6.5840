@@ -30,9 +30,10 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
+	id := -1
+	ptr_id := &id
+	go heartBeat(ptr_id)
 	// Your worker implementation here.
-	//心跳
-
 	for {
 		//向主节点申请任务
 		args := GetTaskArgs{}
@@ -44,14 +45,18 @@ func Worker(mapf func(string, string) []KeyValue,
 				fmt.Printf("No More Task!\n")
 				break
 			}
+			if task.TaskType == Wait {
+				fmt.Printf("Waiting!\n")
+				time.Sleep(time.Second)
+			}
+			id = task.ID
 			switch task.TaskType {
 			case Map:
 				doMap(task, mapf)
 			case Reduce:
 				doReduce(task, reducef)
-			case Wait:
-				time.Sleep(time.Second)
 			}
+			id = -1
 		} else {
 			fmt.Printf("call failed!\n")
 		}
@@ -60,6 +65,15 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+}
+
+func heartBeat(ptr_id *int) {
+	for {
+		if *ptr_id != -1 {
+			args := RecvHeartBeatArgs{*ptr_id}
+			call("Master.RecvHeartBeat", &args, nil)
+		}
+	}
 }
 
 func doMap(task Task, mapf func(string, string) []KeyValue) {
@@ -95,7 +109,43 @@ func doMap(task Task, mapf func(string, string) []KeyValue) {
 }
 
 func doReduce(task Task, reducef func(string, []string) string) {
+	shuffleMap := shuffle(task.FileNames)
 
+	resultKVs := make([]KeyValue, 0)
+	for k, v := range shuffleMap {
+		output := reducef(k, v)
+		resultKVs = append(resultKVs, KeyValue{k, output})
+	}
+
+	oname := "mr-out-" + strconv.Itoa(task.ID)
+	ofile, _ := os.Create(oname)
+	for k, v := range resultKVs {
+		fmt.Fprintf(ofile, "%v %v\n", k, v)
+	}
+	ofile.Close()
+
+	args := TaskDoneArgs{task.ID, []string{oname}}
+	call("Master.TaskDone", &args, nil)
+}
+
+func shuffle(fileNames []string) map[string][]string {
+	shuffledMap := make(map[string][]string)
+	for _, fileName := range fileNames {
+		fd, err := os.Open(fileName)
+		if err != nil {
+			log.Fatalf("cannot open %v", fileName)
+		}
+		dec := json.NewDecoder(fd)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			shuffledMap[kv.Key] = append(shuffledMap[kv.Key], kv.Value)
+		}
+		fd.Close()
+	}
+	return shuffledMap
 }
 
 // example function to show how to make an RPC call to the coordinator.

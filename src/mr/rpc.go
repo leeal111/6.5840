@@ -38,7 +38,11 @@ type TaskDoneArgs struct {
 	ResultFileNames []string
 }
 
-type TaskDoneReply struct {
+type RecvHeartBeatArgs struct {
+	ID int
+}
+
+type RecvHeartBeatReply struct {
 }
 
 // Cook up a unique-ish UNIX-domain socket name
