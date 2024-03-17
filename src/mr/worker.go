@@ -36,7 +36,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		for {
 			args := RecvHeartBeatArgs{id}
 			call("Coordinator.RecvHeartBeat", &args, nil)
-			time.Sleep(2 * time.Second)
+			time.Sleep(time.Second)
 		}
 	}()
 
@@ -53,7 +53,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if reply.TaskType == Wait4Task {
 				//可能暂时没有任务
 				fmt.Printf("Waiting!\n")
-				time.Sleep(5 * time.Second)
+				time.Sleep(time.Second)
 				continue
 			}
 			var resFileNames []string

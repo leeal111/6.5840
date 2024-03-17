@@ -178,7 +178,7 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{CoordinatorState: Mapping, NReduce: nReduce,
-		TimeoutCh: make(chan int), TimeoutDuration: 5 * time.Second}
+		TimeoutCh: make(chan int), TimeoutDuration: 2 * time.Second}
 
 	// Your code here.
 	for _, file := range files {
