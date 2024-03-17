@@ -8,6 +8,7 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type TaskType int
@@ -37,6 +38,7 @@ const (
 
 type Workee struct {
 	TaskID int
+	timer  *time.Timer
 }
 type Task struct {
 	TaskType     TaskType
@@ -52,6 +54,8 @@ type Coordinator struct {
 	CoordinatorState CoordinatorState
 	mutex            sync.Mutex
 	NReduce          int
+	TimeoutCh        chan int
+	TimeoutDuration  time.Duration
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -60,7 +64,12 @@ func (c *Coordinator) GetWorkeeID(args *GetWorkeeIDArgs, reply *GetWorkeeIDReply
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	reply.WorkeeID = len(c.Workees)
-	c.Workees = append(c.Workees, Workee{-1})
+	c.Workees = append(c.Workees, Workee{TaskID: -1, timer: time.NewTimer(c.TimeoutDuration)})
+	go func() {
+		timer := c.Workees[reply.WorkeeID].timer
+		<-timer.C
+		c.TimeoutCh <- reply.WorkeeID
+	}()
 	return nil
 }
 
@@ -98,7 +107,7 @@ func (c *Coordinator) TaskDone(args *TaskDoneArgs, reply *TaskDoneReply) error {
 	task := &c.Tasks[c.Workees[args.WorkeeID].TaskID]
 	task.TaskState = Finished
 	task.ResFileNames = args.ResultFileNames
-
+	c.Workees[args.WorkeeID].TaskID = -1
 	for _, task := range c.Tasks {
 		if task.TaskState != Finished {
 			return nil
@@ -127,6 +136,8 @@ func (c *Coordinator) ChangeState() {
 }
 
 func (c *Coordinator) RecvHeartBeat(args *RecvHeartBeatArgs, reply *RecvHeartBeatReply) error {
+	workID := args.WorkeeID
+	c.Workees[workID].timer.Reset(c.TimeoutDuration)
 	return nil
 }
 
@@ -166,13 +177,23 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{CoordinatorState: Mapping, NReduce: nReduce}
+	c := Coordinator{CoordinatorState: Mapping, NReduce: nReduce,
+		TimeoutCh: make(chan int), TimeoutDuration: 5 * time.Second}
 
 	// Your code here.
 	for _, file := range files {
 		c.Tasks = append(c.Tasks, Task{TaskType: Map,
 			TaskState: Waiting, FileNames: []string{file}})
 	}
+	// 超时处理
+	go func() {
+		for {
+			workeeID := <-c.TimeoutCh
+			fmt.Printf("workee %d 超时\n", workeeID)
+			c.Tasks[c.Workees[workeeID].TaskID].TaskState = Waiting
+			c.Workees[workeeID].TaskID = -1
+		}
+	}()
 	c.server()
 	return &c
 }

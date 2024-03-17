@@ -32,7 +32,13 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 	id := initWorkeeID()
-	go heartBeat(id)
+	go func() {
+		for {
+			args := RecvHeartBeatArgs{id}
+			call("Coordinator.RecvHeartBeat", &args, nil)
+			time.Sleep(2 * time.Second)
+		}
+	}()
 
 	//循环请求并执行任务
 	for {
@@ -47,7 +53,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if reply.TaskType == Wait4Task {
 				//可能暂时没有任务
 				fmt.Printf("Waiting!\n")
-				time.Sleep(time.Second)
+				time.Sleep(5 * time.Second)
 				continue
 			}
 			var resFileNames []string
@@ -79,14 +85,6 @@ func initWorkeeID() int {
 	} else {
 		fmt.Printf("call failed!\n")
 		return -1
-	}
-}
-
-func heartBeat(WorkeeID int) {
-	for {
-		args := RecvHeartBeatArgs{WorkeeID}
-		call("Coordinator.RecvHeartBeat", &args, nil)
-		time.Sleep(time.Second)
 	}
 }
 
