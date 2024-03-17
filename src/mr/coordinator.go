@@ -1,11 +1,13 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type TaskType int
@@ -13,27 +15,118 @@ type TaskType int
 const (
 	Map TaskType = iota
 	Reduce
-	Wait
-	NoTask
+	Wait4Task
+	NoMoreTask
 )
 
+type TaskState int
+
+const (
+	Waiting TaskState = iota
+	Running
+	Finished
+)
+
+type CoordinatorState int
+
+const (
+	Mapping CoordinatorState = iota
+	Reducing
+	Done
+)
+
+type Workee struct {
+	TaskID int
+}
 type Task struct {
-	ID        int
-	TaskType  TaskType
-	FileNames []string
-	NReduce   int
+	TaskType     TaskType
+	TaskState    TaskState
+	FileNames    []string
+	ResFileNames []string
 }
 
 type Coordinator struct {
 	// Your definitions here.
-	Tasks []Task
+	Workees          []Workee
+	Tasks            []Task
+	CoordinatorState CoordinatorState
+	mutex            sync.Mutex
+	NReduce          int
 }
 
 // Your code here -- RPC handlers for the worker to call.
-func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
+
+func (c *Coordinator) GetWorkeeID(args *GetWorkeeIDArgs, reply *GetWorkeeIDReply) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	reply.WorkeeID = len(c.Workees)
+	c.Workees = append(c.Workees, Workee{-1})
 	return nil
 }
+
+func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.CoordinatorState == Done {
+		reply.TaskType = NoMoreTask
+	} else {
+		reply.TaskType = Wait4Task
+	}
+	for i, task := range c.Tasks {
+		if task.TaskState == Waiting {
+			reply.TaskType = task.TaskType
+			reply.TaskID = i
+			reply.FileNames = task.FileNames
+			reply.NReduce = c.NReduce
+			c.Workees[args.WorkeeID].TaskID = i
+			c.Tasks[i].TaskState = Running
+			break
+		}
+	}
+	return nil
+}
+
 func (c *Coordinator) TaskDone(args *TaskDoneArgs, reply *TaskDoneReply) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.Workees[args.WorkeeID].TaskID == -1 {
+		fmt.Printf("error: 超时任务，舍弃\n")
+		return nil
+	}
+	task := &c.Tasks[c.Workees[args.WorkeeID].TaskID]
+	task.TaskState = Finished
+	task.ResFileNames = args.ResultFileNames
+
+	for _, task := range c.Tasks {
+		if task.TaskState != Finished {
+			return nil
+		}
+	}
+	c.ChangeState()
+	return nil
+}
+
+func (c *Coordinator) ChangeState() {
+	if c.CoordinatorState == Mapping {
+		tasks := []Task{}
+		for i := 0; i < c.NReduce; i++ {
+			tasks = append(tasks, Task{TaskType: Reduce, TaskState: Waiting})
+		}
+		for _, ctask := range c.Tasks {
+			for j := range len(tasks) {
+				tasks[j].FileNames = append(tasks[j].FileNames, ctask.ResFileNames[j])
+			}
+		}
+		c.Tasks = append(c.Tasks, tasks...)
+		c.CoordinatorState = Reducing
+	} else if c.CoordinatorState == Reducing {
+		c.CoordinatorState = Done
+	}
+}
+
+func (c *Coordinator) RecvHeartBeat(args *RecvHeartBeatArgs, reply *RecvHeartBeatReply) error {
 	return nil
 }
 
@@ -65,7 +158,7 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	ret = (c.CoordinatorState == Done)
 	return ret
 }
 
@@ -73,10 +166,13 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	c := Coordinator{CoordinatorState: Mapping, NReduce: nReduce}
 
 	// Your code here.
-
+	for _, file := range files {
+		c.Tasks = append(c.Tasks, Task{TaskType: Map,
+			TaskState: Waiting, FileNames: []string{file}})
+	}
 	c.server()
 	return &c
 }

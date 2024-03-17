@@ -30,33 +30,35 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	id := -1
-	ptr_id := &id
-	go heartBeat(ptr_id)
 	// Your worker implementation here.
+	id := initWorkeeID()
+	go heartBeat(id)
+
+	//循环请求并执行任务
 	for {
-		//向主节点申请任务
-		args := GetTaskArgs{}
+		args := GetTaskArgs{id}
 		reply := GetTaskReply{}
 		ok := call("Coordinator.GetTask", &args, &reply)
 		if ok {
-			task := reply.Task
-			if task.TaskType == NoTask {
+			if reply.TaskType == NoMoreTask {
 				fmt.Printf("No More Task!\n")
 				break
 			}
-			if task.TaskType == Wait {
+			if reply.TaskType == Wait4Task {
+				//可能暂时没有任务
 				fmt.Printf("Waiting!\n")
 				time.Sleep(time.Second)
+				continue
 			}
-			id = task.ID
-			switch task.TaskType {
+			var resFileNames []string
+			switch reply.TaskType {
 			case Map:
-				doMap(task, mapf)
+				resFileNames = doMap(reply, mapf)
 			case Reduce:
-				doReduce(task, reducef)
+				resFileNames = doReduce(reply, reducef)
 			}
-			id = -1
+			args := TaskDoneArgs{id, resFileNames}
+			call("Coordinator.TaskDone", &args, nil)
 		} else {
 			fmt.Printf("call failed!\n")
 		}
@@ -67,17 +69,32 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func heartBeat(ptr_id *int) {
-	for {
-		if *ptr_id != -1 {
-			args := RecvHeartBeatArgs{*ptr_id}
-			call("Master.RecvHeartBeat", &args, nil)
-		}
+func initWorkeeID() int {
+	args := GetWorkeeIDArgs{}
+	reply := GetWorkeeIDReply{}
+	ok := call("Coordinator.GetWorkeeID", args, &reply)
+	if ok {
+		fmt.Printf("Get WorkeeID:%d\n", reply.WorkeeID)
+		return reply.WorkeeID
+	} else {
+		fmt.Printf("call failed!\n")
+		return -1
 	}
 }
 
-func doMap(task Task, mapf func(string, string) []KeyValue) {
-	fileName := task.FileNames[0]
+func heartBeat(WorkeeID int) {
+	for {
+		args := RecvHeartBeatArgs{WorkeeID}
+		call("Coordinator.RecvHeartBeat", &args, nil)
+		time.Sleep(time.Second)
+	}
+}
+
+func doMap(reply GetTaskReply, mapf func(string, string) []KeyValue) []string {
+	taskID := reply.TaskID
+	fileName := reply.FileNames[0]
+
+	nReduce := reply.NReduce
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", fileName)
@@ -89,13 +106,13 @@ func doMap(task Task, mapf func(string, string) []KeyValue) {
 	file.Close()
 	kva := mapf(fileName, string(content))
 
-	hashedKva := make([][]KeyValue, task.NReduce)
+	hashedKva := make([][]KeyValue, nReduce)
 	for _, kv := range kva {
-		hashedKva[ihash(kv.Key)%task.NReduce] = append(hashedKva[ihash(kv.Key)%task.NReduce], kv)
+		hashedKva[ihash(kv.Key)%nReduce] = append(hashedKva[ihash(kv.Key)%nReduce], kv)
 	}
 	tmpFileNames := make([]string, 0)
-	for i := 0; i < task.NReduce; i++ {
-		tmpFileName := "mr-" + strconv.Itoa(task.ID) + "-" + strconv.Itoa(i)
+	for i := 0; i < nReduce; i++ {
+		tmpFileName := "mr-" + strconv.Itoa(taskID) + "-" + strconv.Itoa(i)
 		tmpFileNames = append(tmpFileNames, tmpFileName)
 		ofile, _ := os.Create(tmpFileName)
 		enc := json.NewEncoder(ofile)
@@ -104,28 +121,26 @@ func doMap(task Task, mapf func(string, string) []KeyValue) {
 		}
 		ofile.Close()
 	}
-	args := TaskDoneArgs{task.ID, tmpFileNames}
-	call("Master.TaskDone", &args, nil)
+	return tmpFileNames
 }
 
-func doReduce(task Task, reducef func(string, []string) string) {
-	shuffleMap := shuffle(task.FileNames)
-
+func doReduce(reply GetTaskReply, reducef func(string, []string) string) []string {
+	taskID := reply.TaskID
+	fileNames := reply.FileNames
+	shuffleMap := shuffle(fileNames)
 	resultKVs := make([]KeyValue, 0)
 	for k, v := range shuffleMap {
 		output := reducef(k, v)
 		resultKVs = append(resultKVs, KeyValue{k, output})
 	}
 
-	oname := "mr-out-" + strconv.Itoa(task.ID)
+	oname := "mr-out-" + strconv.Itoa(taskID)
 	ofile, _ := os.Create(oname)
-	for k, v := range resultKVs {
-		fmt.Fprintf(ofile, "%v %v\n", k, v)
+	for _, v := range resultKVs {
+		fmt.Fprintf(ofile, "%v %v\n", v.Key, v.Value)
 	}
 	ofile.Close()
-
-	args := TaskDoneArgs{task.ID, []string{oname}}
-	call("Master.TaskDone", &args, nil)
+	return []string{oname}
 }
 
 func shuffle(fileNames []string) map[string][]string {

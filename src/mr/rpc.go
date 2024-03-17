@@ -26,20 +26,32 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
-type GetTaskArgs struct {
+type GetWorkeeIDArgs struct {
+}
+type GetWorkeeIDReply struct {
+	WorkeeID int
 }
 
+type GetTaskArgs struct {
+	WorkeeID int
+}
 type GetTaskReply struct {
-	Task Task
+	TaskType  TaskType
+	TaskID    int
+	FileNames []string
+	NReduce   int
 }
 
 type TaskDoneArgs struct {
-	ID              int
+	WorkeeID        int
 	ResultFileNames []string
 }
 
+type TaskDoneReply struct {
+}
+
 type RecvHeartBeatArgs struct {
-	ID int
+	WorkeeID int
 }
 
 type RecvHeartBeatReply struct {
